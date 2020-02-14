@@ -18,6 +18,8 @@ Sam Fruth <samfruth@k-state.edu>
 >> preparing your submission, other than the Pintos documentation,
 >> course text, lecture notes, and course staff.
 
+Sources: <enter repos here>
+
 
                  ALARM CLOCK
                  ===========
@@ -28,6 +30,7 @@ Sam Fruth <samfruth@k-state.edu>
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
+struct list waiting_list // Not sure what else to put here
 
 ---- ALGORITHMS ----
 
