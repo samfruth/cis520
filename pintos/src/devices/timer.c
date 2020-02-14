@@ -1,4 +1,6 @@
 #include "devices/timer.h"
+#include <list.h>
+#include <stdbool.h>
 #include <debug.h>
 #include <inttypes.h>
 #include <round.h>
@@ -17,6 +19,9 @@
 #error TIMER_FREQ <= 1000 recommended
 #endif
 
+// List of threads that have been put on queue for not reaching specified ticks
+struct list waiting_list;
+
 /* Number of timer ticks since OS booted. */
 static int64_t ticks;
 
@@ -30,6 +35,8 @@ static void busy_wait (int64_t loops);
 static void real_time_sleep (int64_t num, int32_t denom);
 static void real_time_delay (int64_t num, int32_t denom);
 
+static bool tick_cmp(struct list_elem *elem1, struct list_elem *elem2);
+
 /* Sets up the timer to interrupt TIMER_FREQ times per second,
    and registers the corresponding interrupt. */
 void
@@ -37,6 +44,7 @@ timer_init (void)
 {
   pit_configure_channel (0, 2, TIMER_FREQ);
   intr_register_ext (0x20, timer_interrupt, "8254 Timer");
+  list_init(&waiting_list);
 }
 
 /* Calibrates loops_per_tick, used to implement brief delays. */
@@ -84,16 +92,41 @@ timer_elapsed (int64_t then)
   return timer_ticks () - then;
 }
 
+// Comparator operation for the list_insert_ordered LESS function.
+// Determines which list element's tick value is less
+bool
+tick_cmp (struct list_elem *elem1, struct list_elem *elem2)
+{
+  struct thread *thread_elem1;
+  struct thread *thread_elem2;
+
+  thread_elem1 = list_entry(elem1, struct thread, elem);
+  thread_elem2 = list_entry(elem2, struct thread, elem);
+
+  return thread_elem1->tick_count < thread_elem2->tick_count;
+}
+
 /* Sleeps for approximately TICKS timer ticks.  Interrupts must
    be turned on. */
 void
 timer_sleep (int64_t ticks) 
 {
   int64_t start = timer_ticks ();
-
   ASSERT (intr_get_level () == INTR_ON);
-  while (timer_elapsed (start) < ticks) 
-    thread_yield ();
+
+  struct thread *current_thread =  thread_current();
+  // Set number of ticks to reach before re-activating thread
+  current_thread->tick_count = start + ticks;
+  intr_disable();
+  // Insert current thread element in waiting_list ordered by sleep time
+  list_insert_ordered(&waiting_list, &current_thread->elem, tick_cmp, NULL);
+  thread_block();
+  // Reset interrupt to previous status
+  intr_enable();
+
+  /*//while timer ticks elapsed since OS booted < ticks
+  while (timer_elapsed (start) < ticks)
+    thread_yield (); //threads.h - Pause (busy wait) until time*/
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -172,6 +205,25 @@ timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
   thread_tick ();
+
+  // Handle threads in waiting list on interrupt
+  struct thread *thread_check;
+
+  while (!list_empty(&waiting_list))
+  {
+    thread_check = list_entry(list_front(&waiting_list),struct thread,elem);
+    // Check if meeting requirements to be reactivated/unblocked (OS booted time > thread OS boot time + sleep time)
+    if (timer_ticks() > thread_check->tick_count)
+    {
+        // Remove top thread element to be unblocked
+        list_pop_front(&waiting_list);
+        thread_unblock(thread_check);
+    }
+    else
+    {
+        break;
+    }
+  }
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer
